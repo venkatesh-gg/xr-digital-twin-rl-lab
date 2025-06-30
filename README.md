@@ -397,7 +397,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Documentation**: Check the docs for detailed guides
 - **Issues**: Report bugs and request features on GitHub
 - **Discussions**: Join community discussions
-- **Email**: Contact the team at support@factory-digital-twin.com
+- **Email**: Contact the team at venkateshgogula0917@gmail.com
 
 ### Community
 - **Discord**: Join our developer community
