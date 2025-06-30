@@ -1,0 +1,249 @@
+version: '3.8'
+
+services:
+  # Cassandra Database
+  cassandra:
+    image: cassandra:4.0
+    container_name: factory-cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      - CASSANDRA_CLUSTER_NAME=FactoryCluster
+      - CASSANDRA_DC=datacenter1
+      - CASSANDRA_RACK=rack1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+      - MAX_HEAP_SIZE=1G
+      - HEAP_NEWSIZE=256M
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: factory-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: factory-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Elasticsearch
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.8.0
+    container_name: factory-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Kibana
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.8.0
+    container_name: factory-kibana
+    depends_on:
+      - elasticsearch
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Unity Simulation Service
+  unity-sim:
+    build:
+      context: .
+      dockerfile: Dockerfile.unity
+    container_name: factory-unity-sim
+    ports:
+      - "9000:9000"
+      - "8080:8080"
+    environment:
+      - UNITY_HEADLESS=true
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - CASSANDRA_HOST=cassandra
+    depends_on:
+      - kafka
+      - cassandra
+    volumes:
+      - unity_logs:/app/logs
+    restart: unless-stopped
+
+  # Backend Services
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: factory-backend
+    ports:
+      - "8000:8000"
+      - "8265:8265"  # Ray dashboard
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - CASSANDRA_HOST=cassandra
+      - UNITY_HOST=unity-sim
+      - UNITY_PORT=9000
+      - ELASTICSEARCH_HOST=elasticsearch
+      - RAY_HEAD_NODE_HOST=0.0.0.0
+    depends_on:
+      - kafka
+      - cassandra
+      - unity-sim
+      - elasticsearch
+    volumes:
+      - backend_logs:/app/logs
+      - backend_experiments:/app/experiments
+      - backend_checkpoints:/app/checkpoints
+    restart: unless-stopped
+
+  # Spark Streaming
+  spark-streaming:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: factory-spark-streaming
+    command: ["python", "spark_streaming.py", "--mode", "process"]
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - CASSANDRA_HOST=cassandra
+      - SPARK_MASTER=local[*]
+    depends_on:
+      - kafka
+      - cassandra
+    volumes:
+      - spark_checkpoints:/app/checkpoints
+    restart: unless-stopped
+
+  # Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: factory-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_BACKEND_URL=http://localhost:8000
+      - VITE_UNITY_WS_URL=ws://localhost:9000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Ray Head Node (for distributed training)
+  ray-head:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: factory-ray-head
+    command: ["ray", "start", "--head", "--dashboard-host=0.0.0.0", "--block"]
+    ports:
+      - "8266:8265"  # Ray dashboard
+      - "10001:10001"  # Ray client
+    environment:
+      - RAY_DISABLE_IMPORT_WARNING=1
+    volumes:
+      - ray_logs:/tmp/ray
+    restart: unless-stopped
+
+  # Ray Workers (scale as needed)
+  ray-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["ray", "start", "--address=ray-head:10001", "--block"]
+    depends_on:
+      - ray-head
+    environment:
+      - RAY_DISABLE_IMPORT_WARNING=1
+    volumes:
+      - ray_logs:/tmp/ray
+    deploy:
+      replicas: 2
+    restart: unless-stopped
+
+  # Monitoring - Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: factory-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+
+  # Monitoring - Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: factory-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+
+volumes:
+  cassandra_data:
+  kafka_data:
+  zookeeper_data:
+  elasticsearch_data:
+  unity_logs:
+  backend_logs:
+  backend_experiments:
+  backend_checkpoints:
+  spark_checkpoints:
+  ray_logs:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  default:
+    name: factory-network

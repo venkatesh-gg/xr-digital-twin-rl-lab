@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: factory-digital-twin
+  labels:
+    name: factory-digital-twin
+    purpose: cross-reality-simulation

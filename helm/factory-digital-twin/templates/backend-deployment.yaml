@@ -1,0 +1,57 @@
+{{- if .Values.backend.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "factory-digital-twin.fullname" . }}-backend
+  labels:
+    {{- include "factory-digital-twin.labels" . | nindent 4 }}
+    component: backend
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  selector:
+    matchLabels:
+      {{- include "factory-digital-twin.selectorLabels" . | nindent 6 }}
+      component: backend
+  template:
+    metadata:
+      labels:
+        {{- include "factory-digital-twin.selectorLabels" . | nindent 8 }}
+        component: backend
+    spec:
+      containers:
+      - name: backend
+        image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+        imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+        ports:
+        - containerPort: 8000
+          name: api
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "{{ .Values.backend.env.kafkaBootstrapServers }}"
+        - name: CASSANDRA_HOST
+          value: "{{ .Values.backend.env.cassandraHost }}"
+        - name: UNITY_HOST
+          value: "{{ .Values.backend.env.unityHost }}"
+        - name: RAY_HEAD_NODE_HOST
+          value: "{{ .Values.backend.env.rayHeadNodeHost }}"
+        resources:
+          {{- toYaml .Values.backend.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+      volumes:
+      - name: logs
+        emptyDir: {}
+{{- end }}

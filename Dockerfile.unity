@@ -1,0 +1,50 @@
+FROM ubuntu:20.04
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    unzip \
+    xvfb \
+    libglu1-mesa \
+    libxcursor1 \
+    libxrandr2 \
+    libxinerama1 \
+    libxi6 \
+    libxss1 \
+    libgconf-2-4 \
+    libgtk-3-0 \
+    libasound2 \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Unity Hub
+RUN wget -qO - https://hub.unity3d.com/linux/keys/public | apt-key add - \
+    && echo 'deb https://hub.unity3d.com/linux/repos/deb stable main' > /etc/apt/sources.list.d/unityhub.list \
+    && apt-get update \
+    && apt-get install -y unityhub
+
+# Set up Unity
+ENV UNITY_VERSION=2022.3.10f1
+RUN unityhub --headless install --version ${UNITY_VERSION}
+
+# Install Python dependencies
+COPY requirements.txt /app/requirements.txt
+RUN pip3 install -r /app/requirements.txt
+
+# Copy Unity project
+COPY unity/ /app/unity/
+COPY backend/ /app/backend/
+
+WORKDIR /app
+
+# Set up display for headless mode
+ENV DISPLAY=:99
+
+# Start script
+COPY scripts/start_unity.sh /app/start_unity.sh
+RUN chmod +x /app/start_unity.sh
+
+EXPOSE 9000 8080
+
+CMD ["/app/start_unity.sh"]

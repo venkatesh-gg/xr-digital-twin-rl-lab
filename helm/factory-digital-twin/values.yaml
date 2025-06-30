@@ -1,0 +1,243 @@
+# Global configuration
+global:
+  storageClass: "standard"
+  
+# Application configuration
+app:
+  name: factory-digital-twin
+  version: "1.0.0"
+  
+# Unity Simulation
+unity:
+  enabled: true
+  image:
+    repository: factory-unity-sim
+    tag: latest
+    pullPolicy: Always
+  replicas: 2
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1"
+      nvidia.com/gpu: 1
+    limits:
+      memory: "4Gi"
+      cpu: "2"
+      nvidia.com/gpu: 1
+  service:
+    type: ClusterIP
+    ports:
+      tcp: 9000
+      http: 8080
+  config:
+    headless: true
+    maxAgents: 8
+    episodeLength: 1000
+    simulationSpeed: 1.0
+
+# Backend Services
+backend:
+  enabled: true
+  image:
+    repository: factory-backend
+    tag: latest
+    pullPolicy: Always
+  replicas: 2
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+  service:
+    type: LoadBalancer
+    port: 8000
+  env:
+    kafkaBootstrapServers: "kafka:9092"
+    cassandraHost: "cassandra"
+    unityHost: "unity-simulation"
+    rayHeadNodeHost: "ray-head"
+
+# Ray Cluster
+ray:
+  enabled: true
+  head:
+    image:
+      repository: factory-backend
+      tag: latest
+    resources:
+      requests:
+        memory: "4Gi"
+        cpu: "2"
+      limits:
+        memory: "8Gi"
+        cpu: "4"
+    service:
+      dashboard:
+        port: 8265
+      client:
+        port: 10001
+  worker:
+    replicas: 4
+    image:
+      repository: factory-backend
+      tag: latest
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1"
+      limits:
+        memory: "4Gi"
+        cpu: "2"
+
+# Spark Streaming
+spark:
+  enabled: true
+  image:
+    repository: factory-backend
+    tag: latest
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1"
+    limits:
+      memory: "4Gi"
+      cpu: "2"
+  checkpointLocation: "/app/checkpoints"
+
+# Frontend
+frontend:
+  enabled: true
+  image:
+    repository: factory-frontend
+    tag: latest
+    pullPolicy: Always
+  replicas: 2
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  service:
+    type: LoadBalancer
+    port: 80
+  env:
+    backendUrl: "http://factory-backend:8000"
+    unityWsUrl: "ws://unity-simulation:9000"
+
+# Cassandra
+cassandra:
+  enabled: true
+  cluster:
+    name: "Factory Digital Twin Cluster"
+    replicaCount: 3
+  dbUser:
+    user: "factory_user"
+  auth:
+    enabled: false
+  persistence:
+    size: "10Gi"
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1"
+    limits:
+      memory: "4Gi"
+      cpu: "2"
+
+# Kafka
+kafka:
+  enabled: true
+  replicaCount: 3
+  auth:
+    enabled: false
+  zookeeper:
+    enabled: true
+    replicaCount: 1
+  persistence:
+    size: "8Gi"
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+
+# Elasticsearch
+elasticsearch:
+  enabled: true
+  master:
+    replicaCount: 1
+  data:
+    replicaCount: 2
+  coordinating:
+    replicaCount: 1
+  persistence:
+    size: "10Gi"
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+
+# Prometheus
+prometheus:
+  enabled: true
+  server:
+    persistentVolume:
+      size: "10Gi"
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+
+# Grafana
+grafana:
+  enabled: true
+  persistence:
+    enabled: true
+    size: "5Gi"
+  adminPassword: "admin"
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "250m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# Ingress
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+  hosts:
+    - host: factory-digital-twin.local
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend
+        - path: /api
+          pathType: Prefix
+          service: backend
+  tls: []
+
+# Persistent Volumes
+persistence:
+  experiments:
+    enabled: true
+    size: "50Gi"
+    accessMode: ReadWriteMany
+  logs:
+    enabled: true
+    size: "20Gi"
+    accessMode: ReadWriteMany

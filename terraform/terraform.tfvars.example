@@ -1,0 +1,6 @@
+project_id        = "your-gcp-project-id"
+region            = "us-central1"
+zone              = "us-central1-a"
+general_node_count = 3
+gpu_node_count    = 2
+db_password       = "your-secure-password"

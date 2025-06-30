@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: unity-config
+  namespace: factory-digital-twin
+data:
+  config.json: |
+    {
+      "kafka_bootstrap_servers": "kafka:9092",
+      "kafka_topic": "factory-metrics",
+      "cassandra_host": "cassandra",
+      "max_agents": 8,
+      "episode_length": 1000,
+      "simulation_speed": 1.0,
+      "headless": true,
+      "log_level": "INFO"
+    }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: unity-simulation
+  namespace: factory-digital-twin
+  labels:
+    app: unity-simulation
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9000
+    targetPort: 9000
+    name: tcp-socket
+  - port: 8080
+    targetPort: 8080
+    name: http-api
+  selector:
+    app: unity-simulation
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unity-simulation
+  namespace: factory-digital-twin
+  labels:
+    app: unity-simulation
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: unity-simulation
+  template:
+    metadata:
+      labels:
+        app: unity-simulation
+    spec:
+      containers:
+      - name: unity-simulation
+        image: factory-unity-sim:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 9000
+          name: tcp-socket
+        - containerPort: 8080
+          name: http-api
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
+        - name: CASSANDRA_HOST
+          value: "cassandra"
+        - name: UNITY_HEADLESS
+          value: "true"
+        - name: DISPLAY
+          value: ":99"
+        volumeMounts:
+        - name: unity-config
+          mountPath: /app/config
+        - name: unity-logs
+          mountPath: /app/logs
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1"
+            nvidia.com/gpu: 1
+          limits:
+            memory: "4Gi"
+            cpu: "2"
+            nvidia.com/gpu: 1
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      volumes:
+      - name: unity-config
+        configMap:
+          name: unity-config
+      - name: unity-logs
+        emptyDir: {}
+      nodeSelector:
+        accelerator: nvidia-tesla-k80  # Adjust based on your GPU nodes

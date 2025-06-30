@@ -1,0 +1,238 @@
+name: Factory Digital Twin CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      cassandra:
+        image: cassandra:4.0
+        env:
+          CASSANDRA_CLUSTER_NAME: test-cluster
+        ports:
+          - 9042:9042
+        options: >-
+          --health-cmd "cqlsh -e 'describe cluster'"
+          --health-interval 30s
+          --health-timeout 10s
+          --health-retries 5
+
+      kafka:
+        image: confluentinc/cp-kafka:7.4.0
+        env:
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+        ports:
+          - 9092:9092
+
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.4.0
+        env:
+          ZOOKEEPER_CLIENT_PORT: 2181
+        ports:
+          - 2181:2181
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install Python dependencies
+      run: |
+        cd backend
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+
+    - name: Install Node.js dependencies
+      run: |
+        npm ci
+
+    - name: Run Python tests
+      run: |
+        cd backend
+        pytest tests/ --cov=. --cov-report=xml
+
+    - name: Run TypeScript tests
+      run: |
+        npm run test
+
+    - name: Lint Python code
+      run: |
+        cd backend
+        pip install flake8 black
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        black --check .
+
+    - name: Lint TypeScript code
+      run: |
+        npm run lint
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./backend/coverage.xml
+
+  build-images:
+    needs: test
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        image: [backend, frontend, unity]
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.image }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        file: ./Dockerfile.${{ matrix.image }}
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+
+  deploy-staging:
+    if: github.ref == 'refs/heads/develop'
+    needs: build-images
+    runs-on: ubuntu-latest
+    environment: staging
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+    - name: Configure kubectl
+      run: |
+        gcloud container clusters get-credentials ${{ secrets.GKE_CLUSTER_NAME }} --zone ${{ secrets.GKE_ZONE }}
+
+    - name: Deploy to staging
+      run: |
+        helm upgrade --install factory-digital-twin-staging ./helm/factory-digital-twin \
+          --namespace factory-digital-twin-staging \
+          --create-namespace \
+          --set-string global.imageTag=${{ github.sha }} \
+          --set global.environment=staging \
+          -f helm/factory-digital-twin/values-staging.yaml
+
+    - name: Run integration tests
+      run: |
+        kubectl wait --for=condition=available --timeout=300s deployment/factory-digital-twin-staging-backend -n factory-digital-twin-staging
+        # Add integration test commands here
+        echo "Running integration tests..."
+
+  deploy-production:
+    if: github.ref == 'refs/heads/main'
+    needs: build-images
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+    - name: Configure kubectl
+      run: |
+        gcloud container clusters get-credentials ${{ secrets.GKE_CLUSTER_NAME }} --zone ${{ secrets.GKE_ZONE }}
+
+    - name: Deploy to production
+      run: |
+        helm upgrade --install factory-digital-twin ./helm/factory-digital-twin \
+          --namespace factory-digital-twin \
+          --create-namespace \
+          --set-string global.imageTag=${{ github.sha }} \
+          --set global.environment=production \
+          -f helm/factory-digital-twin/values-production.yaml
+
+    - name: Verify deployment
+      run: |
+        kubectl wait --for=condition=available --timeout=300s deployment/factory-digital-twin-backend -n factory-digital-twin
+        kubectl get pods -n factory-digital-twin
+
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  performance-test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        pip install locust requests
+
+    - name: Run performance tests
+      run: |
+        cd tests/performance
+        locust --headless --users 10 --spawn-rate 2 --host http://localhost:8000 --run-time 60s

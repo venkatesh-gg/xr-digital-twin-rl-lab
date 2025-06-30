@@ -1,0 +1,131 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: factory-backend
+  namespace: factory-digital-twin
+  labels:
+    app: factory-backend
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: api
+  selector:
+    app: factory-backend
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: factory-backend
+  namespace: factory-digital-twin
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: factory-backend
+  template:
+    metadata:
+      labels:
+        app: factory-backend
+    spec:
+      containers:
+      - name: factory-backend
+        image: factory-backend:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
+        - name: CASSANDRA_HOST
+          value: "cassandra"
+        - name: UNITY_HOST
+          value: "unity-simulation"
+        - name: RAY_HEAD_NODE_HOST
+          value: "ray-head"
+        - name: ELASTICSEARCH_HOST
+          value: "elasticsearch"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+        volumeMounts:
+        - name: backend-logs
+          mountPath: /app/logs
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: backend-logs
+        emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-streaming
+  namespace: factory-digital-twin
+  labels:
+    app: spark-streaming
+spec:
+  type: ClusterIP
+  ports:
+  - port: 4040
+    targetPort: 4040
+    name: spark-ui
+  selector:
+    app: spark-streaming
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-streaming
+  namespace: factory-digital-twin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-streaming
+  template:
+    metadata:
+      labels:
+        app: spark-streaming
+    spec:
+      containers:
+      - name: spark-streaming
+        image: factory-backend:latest
+        command: ["python", "spark_streaming.py", "--mode", "process"]
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
+        - name: CASSANDRA_HOST
+          value: "cassandra"
+        - name: SPARK_MASTER
+          value: "local[*]"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
+        volumeMounts:
+        - name: spark-checkpoints
+          mountPath: /app/checkpoints
+      volumes:
+      - name: spark-checkpoints
+        emptyDir: {}

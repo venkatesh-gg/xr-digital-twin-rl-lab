@@ -1,0 +1,51 @@
+FROM python:3.9-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Java for Spark
+RUN apt-get update && apt-get install -y openjdk-11-jdk \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements and install Python dependencies
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install additional ML and quantum packages
+RUN pip install \
+    ray[rllib]==2.7.1 \
+    qiskit==0.44.1 \
+    qiskit-aer==0.12.2 \
+    pyspark==3.4.1 \
+    cassandra-driver==3.28.0 \
+    kafka-python==2.0.2 \
+    wandb==0.15.11
+
+# Copy application code
+COPY backend/ .
+
+# Create directories for experiments and checkpoints
+RUN mkdir -p experiments checkpoints logs
+
+# Environment variables
+ENV PYTHONPATH=/app
+ENV RAY_DISABLE_IMPORT_WARNING=1
+
+# Expose ports
+EXPOSE 8000 8265 9000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Default command
+CMD ["python", "main.py"]

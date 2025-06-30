@@ -1,0 +1,15 @@
+# Unity
+Library/
+Temp/
+Build/
+# Python
+__pycache__/
+*.pyc
+# JavaScript (WebXR frontend)
+node_modules/
+dist/
+# Kubernetes/Terraform artefacts
+*.tfstate
+# General
+.env
+.DS_Store

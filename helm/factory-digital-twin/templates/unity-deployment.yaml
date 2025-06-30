@@ -1,0 +1,62 @@
+{{- if .Values.unity.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "factory-digital-twin.fullname" . }}-unity
+  labels:
+    {{- include "factory-digital-twin.labels" . | nindent 4 }}
+    component: unity-simulation
+spec:
+  replicas: {{ .Values.unity.replicas }}
+  selector:
+    matchLabels:
+      {{- include "factory-digital-twin.selectorLabels" . | nindent 6 }}
+      component: unity-simulation
+  template:
+    metadata:
+      labels:
+        {{- include "factory-digital-twin.selectorLabels" . | nindent 8 }}
+        component: unity-simulation
+    spec:
+      containers:
+      - name: unity-simulation
+        image: "{{ .Values.unity.image.repository }}:{{ .Values.unity.image.tag }}"
+        imagePullPolicy: {{ .Values.unity.image.pullPolicy }}
+        ports:
+        - containerPort: 9000
+          name: tcp-socket
+        - containerPort: 8080
+          name: http-api
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "{{ .Values.backend.env.kafkaBootstrapServers }}"
+        - name: CASSANDRA_HOST
+          value: "{{ .Values.backend.env.cassandraHost }}"
+        - name: UNITY_HEADLESS
+          value: "{{ .Values.unity.config.headless }}"
+        - name: MAX_AGENTS
+          value: "{{ .Values.unity.config.maxAgents }}"
+        - name: DISPLAY
+          value: ":99"
+        resources:
+          {{- toYaml .Values.unity.resources | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      nodeSelector:
+        accelerator: nvidia-tesla-k80
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: present
+        effect: NoSchedule
+{{- end }}
